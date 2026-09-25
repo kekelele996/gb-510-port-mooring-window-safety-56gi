@@ -27,6 +27,24 @@ export function createEntityStore(id: string) {
           this.loading = false;
         }
       },
+      async resubmitClearance(path: string, item: DomainRecord) {
+        this.loading = true;
+        this.error = '';
+        try {
+          await request<DomainRecord>(`/${path}/${item.id}/transition`, {
+            method: 'POST',
+            body: JSON.stringify({
+              status: 'cleared', expectedVersion: item.version,
+              windowVersion: 0, reason: '关联窗口变化后重新提交，按当前窗口版本与有效期重新冻结',
+            }),
+          });
+          await this.load(path);
+        } catch (error) {
+          this.error = error instanceof Error ? error.message : String(error);
+        } finally {
+          this.loading = false;
+        }
+      },
     },
   });
 }

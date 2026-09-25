@@ -24,11 +24,12 @@ type WeatherWindowService interface {
 
 type weatherWindowService struct {
 	repository repository.WeatherWindowRepository
+	clearances repository.SafetyClearanceRepository
 	security   SecurityService
 }
 
-func NewWeatherWindowService(repo repository.WeatherWindowRepository, security SecurityService) WeatherWindowService {
-	return &weatherWindowService{repository: repo, security: security}
+func NewWeatherWindowService(repo repository.WeatherWindowRepository, clearances repository.SafetyClearanceRepository, security SecurityService) WeatherWindowService {
+	return &weatherWindowService{repository: repo, clearances: clearances, security: security}
 }
 
 func (s *weatherWindowService) List(ctx context.Context, query dto.PageQuery) (repository.Page[model.WeatherWindow], error) {
@@ -51,8 +52,8 @@ func (s *weatherWindowService) Create(ctx context.Context, input dto.CreateWeath
 		Facility: strings.TrimSpace(input.Facility), Owner: strings.TrimSpace(input.Owner),
 		Category: strings.TrimSpace(input.Category), RiskLevel: input.RiskLevel,
 		MetricValue: input.MetricValue, MetricUnit: strings.TrimSpace(input.MetricUnit),
-		EffectiveAt: input.EffectiveAt.UTC(), Evidence: strings.TrimSpace(input.Evidence),
-		RelatedCode: strings.ToUpper(strings.TrimSpace(input.RelatedCode)),
+		EffectiveAt: input.EffectiveAt.UTC(), ExpiresAt: input.ExpiresAt.UTC(),
+		Evidence: strings.TrimSpace(input.Evidence), RelatedCode: strings.ToUpper(strings.TrimSpace(input.RelatedCode)),
 	}
 	if err := s.repository.Create(ctx, &item); err != nil {
 		return model.WeatherWindow{}, fmt.Errorf("create 风浪窗口: %w", err)
@@ -78,6 +79,7 @@ func (s *weatherWindowService) Update(ctx context.Context, id uint, input dto.Up
 	current.MetricValue = input.MetricValue
 	current.MetricUnit = strings.TrimSpace(input.MetricUnit)
 	current.EffectiveAt = input.EffectiveAt.UTC()
+	current.ExpiresAt = input.ExpiresAt.UTC()
 	current.Evidence = strings.TrimSpace(input.Evidence)
 	current.RelatedCode = strings.ToUpper(strings.TrimSpace(input.RelatedCode))
 	current.Version = input.ExpectedVersion + 1
@@ -108,7 +110,44 @@ func (s *weatherWindowService) Transition(ctx context.Context, id uint, input dt
 	if err := s.security.Audit(ctx, actor, requestID, "transition", "WeatherWindow", id, before, target, input.Reason); err != nil {
 		return model.WeatherWindow{}, fmt.Errorf("persist transition audit: %w", err)
 	}
+	if target == "restricted" || target == "expired" {
+		if err := s.invalidatePendingClearances(ctx, current, target, actor, requestID); err != nil {
+			return model.WeatherWindow{}, err
+		}
+	}
 	return s.repository.Get(ctx, id)
+}
+
+// invalidatePendingClearances voids every pending clearance in the same
+// operational area that references this window, recording why it expired.
+func (s *weatherWindowService) invalidatePendingClearances(ctx context.Context, window model.WeatherWindow, target, actor, requestID string) error {
+	pending, err := s.clearances.ListPendingByWindow(ctx, window.Facility, window.Code)
+	if err != nil {
+		return fmt.Errorf("list pending clearances for window %s: %w", window.Code, err)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	stateLabel := "受限"
+	if target == "expired" {
+		stateLabel = "过期"
+	}
+	reason := fmt.Sprintf("关联风浪窗口 %s 已%s，安全许可自动失效，需重新提交", window.Code, stateLabel)
+	for _, item := range pending {
+		before := item.Status
+		expected := item.Version
+		item.Status = string(constants.ClearanceStateExpired)
+		item.InvalidReason = reason
+		item.Version = expected + 1
+		item.UpdatedAt = time.Now().UTC()
+		if err := s.clearances.Update(ctx, item.ID, expected, &item); err != nil {
+			return fmt.Errorf("expire pending clearance %d: %w", item.ID, err)
+		}
+		if err := s.security.AuditWithWindowVersion(ctx, actor, requestID, "clearance_window_invalidated", "SafetyClearance", item.ID, before, item.Status, reason, window.Version); err != nil {
+			return fmt.Errorf("persist clearance invalidation audit: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *weatherWindowService) Delete(ctx context.Context, id uint, actor, requestID string) error {

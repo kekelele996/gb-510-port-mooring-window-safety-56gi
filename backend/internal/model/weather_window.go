@@ -14,6 +14,7 @@ type WeatherWindow struct {
 	MetricValue float64   `json:"metricValue"`
 	MetricUnit  string    `json:"metricUnit" gorm:"size:24"`
 	EffectiveAt time.Time `json:"effectiveAt"`
+	ExpiresAt   time.Time `json:"expiresAt" gorm:"index"`
 	Evidence    string    `json:"evidence" gorm:"size:2000"`
 	RelatedCode string    `json:"relatedCode" gorm:"size:64;index"`
 }

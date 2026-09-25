@@ -21,13 +21,15 @@ onMounted(() => void props.store.load(props.config.path));
 async function createDemo() {
   if (!canWrite.value) return;
   const now = Date.now();
+  const isClearance = props.config.key === 'safetyClearance';
   await props.store.createRecord(props.config.path, {
     code: `${props.config.key.toUpperCase()}-${String(now).slice(-6)}`,
     name: `新增${props.config.label}`,
     description: '通过前端工作台创建的业务记录',
-    facility: '默认作业区', owner: '现场操作员', category: '常规', riskLevel: 'medium',
+    facility: isClearance ? '港口系泊安全窗口评估区域1' : '默认作业区', owner: '现场操作员', category: '常规', riskLevel: 'medium',
     metricValue: 25, metricUnit: 'unit', effectiveAt: new Date().toISOString(),
-    evidence: '已完成创建前检查', relatedCode: '', windowVersion: 1,
+    expiresAt: new Date(now + 24 * 3600 * 1000).toISOString(),
+    evidence: '已完成创建前检查', relatedCode: isClearance ? 'WW-001' : '', windowVersion: 1,
   });
   showCreate.value = false;
 }

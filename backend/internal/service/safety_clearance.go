@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/blueship581/port-mooring-window-safety/backend/internal/dto"
 	"github.com/blueship581/port-mooring-window-safety/backend/internal/model"
 	"github.com/blueship581/port-mooring-window-safety/backend/internal/repository"
+	"gorm.io/gorm"
 )
 
 type SafetyClearanceService interface {
@@ -24,11 +26,12 @@ type SafetyClearanceService interface {
 
 type safetyClearanceService struct {
 	repository repository.SafetyClearanceRepository
+	windows    repository.WeatherWindowRepository
 	security   SecurityService
 }
 
-func NewSafetyClearanceService(repo repository.SafetyClearanceRepository, security SecurityService) SafetyClearanceService {
-	return &safetyClearanceService{repository: repo, security: security}
+func NewSafetyClearanceService(repo repository.SafetyClearanceRepository, windows repository.WeatherWindowRepository, security SecurityService) SafetyClearanceService {
+	return &safetyClearanceService{repository: repo, windows: windows, security: security}
 }
 
 func (s *safetyClearanceService) List(ctx context.Context, query dto.PageQuery) (repository.Page[model.SafetyClearance], error) {
@@ -129,27 +132,32 @@ func (s *safetyClearanceService) Transition(ctx context.Context, id uint, input 
 	return s.repository.Get(ctx, id)
 }
 
+// confirmClearance drives the two-person safety rule. The first call freezes
+// the linked weather window version and expiry onto the clearance; the second
+// call re-reads the live window and refuses to release when the window was
+// revised, restricted or expired. A call with WindowVersion == 0 resubmits
+// against the current window after such a rejection.
 func (s *safetyClearanceService) confirmClearance(ctx context.Context, current model.SafetyClearance, input dto.TransitionRequest, actor, role, requestID string) (model.SafetyClearance, error) {
-	if input.WindowVersion == 0 {
-		return model.SafetyClearance{}, ErrWindowVersion
-	}
 	now := time.Now().UTC()
-	if current.SubmittedBy == "" {
-		current.WindowVersion = input.WindowVersion
-		current.SubmittedBy = actor
-		current.SubmittedAt = &now
-		current.Version = input.ExpectedVersion + 1
-		current.UpdatedAt = now
-		if err := s.repository.Update(ctx, current.ID, input.ExpectedVersion, &current); err != nil {
-			return model.SafetyClearance{}, fmt.Errorf("submit safety confirmation: %w", err)
+	if current.SubmittedBy == "" || input.WindowVersion == 0 {
+		action := "clearance_submit"
+		if current.SubmittedBy != "" {
+			action = "clearance_resubmit"
 		}
-		if err := s.security.AuditWithWindowVersion(ctx, actor, requestID, "clearance_submit", "SafetyClearance", current.ID, current.Status, current.Status, input.Reason, current.WindowVersion); err != nil {
-			return model.SafetyClearance{}, fmt.Errorf("persist safety submission audit: %w", err)
-		}
-		return s.repository.Get(ctx, current.ID)
+		return s.submitClearance(ctx, current, input, actor, requestID, action, now)
 	}
 	if current.WindowVersion != input.WindowVersion {
 		return model.SafetyClearance{}, ErrWindowVersion
+	}
+	window, err := s.linkedWindow(ctx, current)
+	if err != nil {
+		return model.SafetyClearance{}, err
+	}
+	if window.Version != current.WindowVersion {
+		return model.SafetyClearance{}, ErrWindowVersion
+	}
+	if err := ensureWindowClearable(window, now); err != nil {
+		return model.SafetyClearance{}, err
 	}
 	if current.SubmittedBy == actor {
 		return model.SafetyClearance{}, ErrSelfApproval
@@ -170,6 +178,71 @@ func (s *safetyClearanceService) confirmClearance(ctx context.Context, current m
 		return model.SafetyClearance{}, fmt.Errorf("persist safety confirmation audit: %w", err)
 	}
 	return s.repository.Get(ctx, current.ID)
+}
+
+// submitClearance freezes the live window version and expiry onto the
+// clearance and records who submitted. It serves both the first submission
+// and resubmission after the window was revised, restricted or expired.
+func (s *safetyClearanceService) submitClearance(ctx context.Context, current model.SafetyClearance, input dto.TransitionRequest, actor, requestID, action string, now time.Time) (model.SafetyClearance, error) {
+	window, err := s.linkedWindow(ctx, current)
+	if err != nil {
+		return model.SafetyClearance{}, err
+	}
+	if err := ensureWindowClearable(window, now); err != nil {
+		return model.SafetyClearance{}, err
+	}
+	current.WindowVersion = window.Version
+	current.WindowExpiresAt = windowExpiresAt(window)
+	current.SubmittedBy = actor
+	current.SubmittedAt = &now
+	current.ConfirmedBy = ""
+	current.ConfirmedAt = nil
+	current.Version = input.ExpectedVersion + 1
+	current.UpdatedAt = now
+	if err := s.repository.Update(ctx, current.ID, input.ExpectedVersion, &current); err != nil {
+		return model.SafetyClearance{}, fmt.Errorf("submit safety confirmation: %w", err)
+	}
+	if err := s.security.AuditWithWindowVersion(ctx, actor, requestID, action, "SafetyClearance", current.ID, current.Status, current.Status, input.Reason, current.WindowVersion); err != nil {
+		return model.SafetyClearance{}, fmt.Errorf("persist safety submission audit: %w", err)
+	}
+	return s.repository.Get(ctx, current.ID)
+}
+
+// linkedWindow resolves the weather window a clearance depends on through the
+// operational area (facility) and the window code (relatedCode).
+func (s *safetyClearanceService) linkedWindow(ctx context.Context, item model.SafetyClearance) (model.WeatherWindow, error) {
+	code := strings.ToUpper(strings.TrimSpace(item.RelatedCode))
+	if code == "" {
+		return model.WeatherWindow{}, ErrWindowLinked
+	}
+	window, err := s.windows.FindByCode(ctx, code, item.Facility)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.WeatherWindow{}, ErrWindowLinked
+		}
+		return model.WeatherWindow{}, fmt.Errorf("load linked weather window: %w", err)
+	}
+	return window, nil
+}
+
+// ensureWindowClearable rejects windows that are restricted, expired by
+// status, or past their expiry time.
+func ensureWindowClearable(window model.WeatherWindow, now time.Time) error {
+	if window.Status == "restricted" || window.Status == "expired" {
+		return ErrWindowState
+	}
+	if !window.ExpiresAt.IsZero() && !window.ExpiresAt.After(now) {
+		return ErrWindowExpired
+	}
+	return nil
+}
+
+func windowExpiresAt(window model.WeatherWindow) *time.Time {
+	if window.ExpiresAt.IsZero() {
+		return nil
+	}
+	expiresAt := window.ExpiresAt
+	return &expiresAt
 }
 
 func (s *safetyClearanceService) Delete(ctx context.Context, id uint, actor, requestID string) error {

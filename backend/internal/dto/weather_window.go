@@ -15,6 +15,7 @@ type CreateWeatherWindow struct {
 	MetricValue float64   `json:"metricValue"`
 	MetricUnit  string    `json:"metricUnit" binding:"max=24"`
 	EffectiveAt time.Time `json:"effectiveAt" binding:"required"`
+	ExpiresAt   time.Time `json:"expiresAt" binding:"required"`
 	Evidence    string    `json:"evidence" binding:"max=2000"`
 	RelatedCode string    `json:"relatedCode" binding:"max=64"`
 }
@@ -30,6 +31,7 @@ type UpdateWeatherWindow struct {
 	MetricValue     float64   `json:"metricValue"`
 	MetricUnit      string    `json:"metricUnit" binding:"max=24"`
 	EffectiveAt     time.Time `json:"effectiveAt" binding:"required"`
+	ExpiresAt       time.Time `json:"expiresAt" binding:"required"`
 	Evidence        string    `json:"evidence" binding:"max=2000"`
 	RelatedCode     string    `json:"relatedCode" binding:"max=64"`
 }

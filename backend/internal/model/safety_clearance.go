@@ -7,16 +7,22 @@ import "time"
 // changes naturally span persistence, service and UI layers.
 type SafetyClearance struct {
 	BaseModel
-	Facility      string     `json:"facility" gorm:"size:120;index"`
-	Owner         string     `json:"owner" gorm:"size:120;index"`
-	Category      string     `json:"category" gorm:"size:80;index"`
-	RiskLevel     string     `json:"riskLevel" gorm:"size:32;index"`
-	MetricValue   float64    `json:"metricValue"`
-	MetricUnit    string     `json:"metricUnit" gorm:"size:24"`
-	EffectiveAt   time.Time  `json:"effectiveAt"`
-	Evidence      string     `json:"evidence" gorm:"size:2000"`
-	RelatedCode   string     `json:"relatedCode" gorm:"size:64;index"`
-	WindowVersion uint       `json:"windowVersion" gorm:"not null;default:1"`
+	Facility      string    `json:"facility" gorm:"size:120;index"`
+	Owner         string    `json:"owner" gorm:"size:120;index"`
+	Category      string    `json:"category" gorm:"size:80;index"`
+	RiskLevel     string    `json:"riskLevel" gorm:"size:32;index"`
+	MetricValue   float64   `json:"metricValue"`
+	MetricUnit    string    `json:"metricUnit" gorm:"size:24"`
+	EffectiveAt   time.Time `json:"effectiveAt"`
+	Evidence      string    `json:"evidence" gorm:"size:2000"`
+	RelatedCode   string    `json:"relatedCode" gorm:"size:64;index"`
+	WindowVersion uint      `json:"windowVersion" gorm:"not null;default:1"`
+	// WindowExpiresAt freezes the linked weather window expiry at submission
+	// time so reviewers can compare it against the live window record.
+	WindowExpiresAt *time.Time `json:"windowExpiresAt"`
+	// InvalidReason explains why a pending clearance was voided when its
+	// linked weather window became restricted or expired.
+	InvalidReason string     `json:"invalidReason" gorm:"size:500"`
 	SubmittedBy   string     `json:"submittedBy" gorm:"size:80;index"`
 	SubmittedAt   *time.Time `json:"submittedAt"`
 	ConfirmedBy   string     `json:"confirmedBy" gorm:"size:80;index"`

@@ -52,6 +52,24 @@ func (s *Store[T]) Get(ctx context.Context, id uint) (T, error) {
 	return item, err
 }
 
+// FindByCodeAndFacility locates one aggregate by its human-facing code inside
+// an operational area. Clearances use it to resolve their linked weather window.
+func (s *Store[T]) FindByCodeAndFacility(ctx context.Context, code, facility string) (T, error) {
+	var item T
+	err := s.db.WithContext(ctx).Where("code = ? AND facility = ?", code, facility).First(&item).Error
+	return item, err
+}
+
+// ListByRelatedCode returns records of one area that reference the given code
+// and currently sit in the requested status.
+func (s *Store[T]) ListByRelatedCode(ctx context.Context, facility, relatedCode, status string) ([]T, error) {
+	items := make([]T, 0)
+	err := s.db.WithContext(ctx).
+		Where("facility = ? AND related_code = ? AND status = ?", facility, relatedCode, status).
+		Find(&items).Error
+	return items, err
+}
+
 func (s *Store[T]) Create(ctx context.Context, item *T) error {
 	return s.db.WithContext(ctx).Create(item).Error
 }
