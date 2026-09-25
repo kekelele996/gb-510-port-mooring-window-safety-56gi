@@ -26,6 +26,16 @@ type Store[T any] struct {
 
 func NewStore[T any](db *gorm.DB) *Store[T] { return &Store[T]{db: db} }
 
+// DB exposes the underlying session for aggregate-specific queries (joins)
+// that the generic helpers cannot express.
+func (s *Store[T]) DB() *gorm.DB { return s.db }
+
+func (s *Store[T]) FirstWhere(ctx context.Context, query string, args ...any) (T, error) {
+	var item T
+	err := s.db.WithContext(ctx).Where(query, args...).First(&item).Error
+	return item, err
+}
+
 func (s *Store[T]) List(ctx context.Context, query dto.PageQuery) (Page[T], error) {
 	page, pageSize := normalizePage(query.Page, query.PageSize)
 	db := s.db.WithContext(ctx).Model(new(T))

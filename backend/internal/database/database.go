@@ -75,13 +75,32 @@ func Open(ctx context.Context, cfg config.Config, log *slog.Logger) (*gorm.DB, *
 }
 
 func migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&model.User{}, &model.AuditLog{},
 		&model.VesselCall{},
 		&model.MooringPlan{},
 		&model.WeatherWindow{},
 		&model.SafetyClearance{},
-	)
+	); err != nil {
+		return err
+	}
+	// 风浪窗口编码按区域（facility）唯一：许可按 facility + code 关联窗口，
+	// 不同区域允许复用同一编码。用显式 DDL 替换 BaseModel 留下的全局唯一索引，
+	// 因为 GORM 标签无法把嵌入字段 Code 并入命名复合索引。
+	table := model.WeatherWindow{}.TableName()
+	globalIndex := "idx_" + table + "_code"
+	if db.Migrator().HasTable(&model.WeatherWindow{}) && db.Migrator().HasIndex(&model.WeatherWindow{}, globalIndex) {
+		if err := db.Migrator().DropIndex(&model.WeatherWindow{}, globalIndex); err != nil {
+			return err
+		}
+	}
+	compositeIndex := "idx_" + table + "_facility_code"
+	if !db.Migrator().HasIndex(&model.WeatherWindow{}, compositeIndex) {
+		if err := db.Exec(fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (facility, code)", compositeIndex, table)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func Seed(ctx context.Context, db *gorm.DB) error {
@@ -184,20 +203,20 @@ func seedWeatherWindow(ctx context.Context, db *gorm.DB) error {
 	now := time.Now().UTC()
 	items := []model.WeatherWindow{
 
-		{BaseModel: model.BaseModel{Code: "WW-001", Name: "风浪窗口示例一", Status: "forecast", Version: 1,
+		{BaseModel: model.BaseModel{Code: "WW-001", Name: "风浪窗口示例一", Status: "safe", Version: 1,
 			Description: "用于启动验证和主要流程演示的风浪窗口记录"}, Facility: "港口系泊安全窗口评估区域1", Owner: "运行一组",
 			Category: "常规", RiskLevel: "low", MetricValue: 12.5, MetricUnit: "unit",
-			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-510-01"},
+			EffectiveAt: now.Add(-1 * time.Hour), ExpireAt: now.Add(12 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-510-01"},
 
 		{BaseModel: model.BaseModel{Code: "WW-002", Name: "风浪窗口示例二", Status: "safe", Version: 1,
 			Description: "用于启动验证和主要流程演示的风浪窗口记录"}, Facility: "港口系泊安全窗口评估区域2", Owner: "质量复核组",
 			Category: "重点", RiskLevel: "medium", MetricValue: 25.0, MetricUnit: "%",
-			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-510-02"},
+			EffectiveAt: now.Add(0 * time.Hour), ExpireAt: now.Add(24 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-510-02"},
 
 		{BaseModel: model.BaseModel{Code: "WW-003", Name: "风浪窗口示例三", Status: "restricted", Version: 1,
 			Description: "用于启动验证和主要流程演示的风浪窗口记录"}, Facility: "港口系泊安全窗口评估区域3", Owner: "安全主管组",
 			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
-			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-510-03"},
+			EffectiveAt: now.Add(-6 * time.Hour), ExpireAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-510-03"},
 	}
 	return db.WithContext(ctx).Create(&items).Error
 }
@@ -214,18 +233,19 @@ func seedSafetyClearance(ctx context.Context, db *gorm.DB) error {
 			Description: "用于启动验证和主要流程演示的安全许可记录"}, Facility: "港口系泊安全窗口评估区域1", Owner: "运行一组",
 			Category: "常规", RiskLevel: "low", MetricValue: 12.5, MetricUnit: "unit",
 			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "WW-001",
-			WindowVersion: 1, SubmittedBy: "operator", SubmittedAt: timePointer(now.Add(-15 * time.Minute))},
+			WindowVersion: 1, WindowExpireAt: timePointer(now.Add(12 * time.Hour)), SubmittedBy: "operator", SubmittedAt: timePointer(now.Add(-15 * time.Minute))},
 
 		{BaseModel: model.BaseModel{Code: "SC-002", Name: "安全许可示例二", Status: "cleared", Version: 1,
 			Description: "用于启动验证和主要流程演示的安全许可记录"}, Facility: "港口系泊安全窗口评估区域2", Owner: "质量复核组",
 			Category: "重点", RiskLevel: "medium", MetricValue: 25.0, MetricUnit: "%",
 			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "WW-002",
-			WindowVersion: 1, SubmittedBy: "operator", SubmittedAt: timePointer(now.Add(-45 * time.Minute)), ConfirmedBy: "reviewer", ConfirmedAt: timePointer(now.Add(-30 * time.Minute))},
+			WindowVersion: 1, WindowExpireAt: timePointer(now.Add(24 * time.Hour)), SubmittedBy: "operator", SubmittedAt: timePointer(now.Add(-45 * time.Minute)), ConfirmedBy: "reviewer", ConfirmedAt: timePointer(now.Add(-30 * time.Minute))},
 
 		{BaseModel: model.BaseModel{Code: "SC-003", Name: "安全许可示例三", Status: "restricted", Version: 1,
 			Description: "用于启动验证和主要流程演示的安全许可记录"}, Facility: "港口系泊安全窗口评估区域3", Owner: "安全主管组",
 			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
-			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "WW-003", WindowVersion: 1},
+			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "WW-003",
+			WindowVersion: 1, WindowExpireAt: timePointer(now.Add(6 * time.Hour)), InvalidReason: "关联窗口 WW-003 已受限，待处理许可自动失效，请重新提交"},
 	}
 	return db.WithContext(ctx).Create(&items).Error
 }

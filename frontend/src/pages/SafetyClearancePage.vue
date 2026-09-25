@@ -7,10 +7,18 @@ import { useSafetyClearanceStore } from '../stores/safety-clearance';
 
 const store = useSafetyClearanceStore();
 const confirmClearance = (item: DomainRecord) => store.confirmClearance('clearance', item);
+const resubmitClearance = (item: DomainRecord) => store.resubmitClearance('clearance', item);
 </script>
 
 <template>
   <EntityPage :config="ENTITY_CONFIGS[3]" :store="store" hide-transitions>
-    <template #insight><ClearancePanel :records="store.items" mode="clearance" @confirm="confirmClearance"/></template>
+    <template #insight>
+      <ClearancePanel
+        :records="store.items"
+        mode="clearance"
+        @confirm="confirmClearance"
+        @resubmit="resubmitClearance"
+      />
+    </template>
   </EntityPage>
 </template>

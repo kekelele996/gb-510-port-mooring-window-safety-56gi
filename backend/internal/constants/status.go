@@ -47,10 +47,10 @@ var WeatherWindowTransitions = map[string]map[string]bool{
 }
 
 var SafetyClearanceTransitions = map[string]map[string]bool{
-	"pending":    {"cleared": true, "restricted": true},
+	"pending":    {"cleared": true, "restricted": true, "expired": true},
 	"cleared":    {"restricted": true, "expired": true, "pending": true},
-	"restricted": {"expired": true, "cleared": true},
-	"expired":    {"restricted": true},
+	"restricted": {"expired": true, "cleared": true, "pending": true},
+	"expired":    {"restricted": true, "pending": true},
 }
 
 func CanTransition(graph map[string]map[string]bool, from, to string) bool {

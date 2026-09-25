@@ -14,8 +14,19 @@ type WeatherWindow struct {
 	MetricValue float64   `json:"metricValue"`
 	MetricUnit  string    `json:"metricUnit" gorm:"size:24"`
 	EffectiveAt time.Time `json:"effectiveAt"`
+	ExpireAt    time.Time `json:"expireAt"`
 	Evidence    string    `json:"evidence" gorm:"size:2000"`
 	RelatedCode string    `json:"relatedCode" gorm:"size:64;index"`
+}
+
+// UsableForClearance reports whether the window may currently back a safety
+// clearance submission or release. A window is only valid while explicitly
+// safe and still inside its effective time range.
+func (item WeatherWindow) UsableForClearance(now time.Time) bool {
+	if item.Status != "safe" {
+		return false
+	}
+	return !item.ExpireAt.Before(now) && !now.Before(item.EffectiveAt)
 }
 
 func (item *WeatherWindow) GetBase() *BaseModel { return &item.BaseModel }

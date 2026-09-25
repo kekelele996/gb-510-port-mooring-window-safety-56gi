@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/blueship581/port-mooring-window-safety/backend/internal/dto"
 	"github.com/blueship581/port-mooring-window-safety/backend/internal/model"
@@ -16,6 +17,8 @@ type SafetyClearanceRepository interface {
 	Update(context.Context, uint, uint, *model.SafetyClearance) error
 	Delete(context.Context, uint) error
 	CountByStatus(context.Context) (map[string]int64, error)
+	ListPendingByWindow(context.Context, string, string) ([]model.SafetyClearance, error)
+	ListPendingLinkedToExpiredWindow(context.Context, time.Time) ([]model.SafetyClearance, error)
 }
 
 type safetyClearanceRepository struct {
@@ -43,4 +46,28 @@ func (r *safetyClearanceRepository) Delete(ctx context.Context, id uint) error {
 }
 func (r *safetyClearanceRepository) CountByStatus(ctx context.Context) (map[string]int64, error) {
 	return r.store.CountByStatus(ctx)
+}
+
+// ListPendingByWindow returns the still-pending clearances frozen against the
+// window identified by facility and window code (related_code).
+func (r *safetyClearanceRepository) ListPendingByWindow(ctx context.Context, facility, code string) ([]model.SafetyClearance, error) {
+	var items []model.SafetyClearance
+	err := r.store.DB().WithContext(ctx).
+		Where("status = ? AND facility = ? AND related_code = ?", "pending", facility, code).
+		Find(&items).Error
+	return items, err
+}
+
+// ListPendingLinkedToExpiredWindow returns pending clearances whose frozen
+// validity has lapsed or whose live window disappeared or was expired, so a
+// read path can lazily invalidate them even without an explicit transition.
+func (r *safetyClearanceRepository) ListPendingLinkedToExpiredWindow(ctx context.Context, now time.Time) ([]model.SafetyClearance, error) {
+	var items []model.SafetyClearance
+	err := r.store.DB().WithContext(ctx).
+		Table("safety_clearances AS sc").
+		Joins("LEFT JOIN weather_windows AS ww ON ww.facility = sc.facility AND ww.code = sc.related_code AND ww.deleted_at IS NULL").
+		Where("sc.deleted_at IS NULL AND sc.status = ? AND (sc.window_expire_at < ? OR ww.id IS NULL OR ww.status = ?)",
+			"pending", now, "expired").
+		Find(&items).Error
+	return items, err
 }

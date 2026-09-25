@@ -21,13 +21,18 @@ onMounted(() => void props.store.load(props.config.path));
 async function createDemo() {
   if (!canWrite.value) return;
   const now = Date.now();
+  const isClearance = props.config.key === 'safetyClearance';
+  // 许可必须按区域 + 窗口编码关联当前可用窗口，这里使用演示数据中的 WW-001。
+  const facility = isClearance ? '港口系泊安全窗口评估区域1' : '默认作业区';
   await props.store.createRecord(props.config.path, {
     code: `${props.config.key.toUpperCase()}-${String(now).slice(-6)}`,
     name: `新增${props.config.label}`,
     description: '通过前端工作台创建的业务记录',
-    facility: '默认作业区', owner: '现场操作员', category: '常规', riskLevel: 'medium',
+    facility, owner: '现场操作员', category: '常规', riskLevel: 'medium',
     metricValue: 25, metricUnit: 'unit', effectiveAt: new Date().toISOString(),
-    evidence: '已完成创建前检查', relatedCode: '', windowVersion: 1,
+    expireAt: new Date(now + 6 * 60 * 60 * 1000).toISOString(),
+    evidence: '已完成创建前检查',
+    relatedCode: isClearance ? 'WW-001' : '',
   });
   showCreate.value = false;
 }
@@ -68,13 +73,36 @@ async function confirmTransition() {
           <template #default="{ row }"><strong>{{ row.name }}</strong><small>{{ row.facility }}</small></template>
         </el-table-column>
         <el-table-column label="状态" width="140"><template #default="{ row }"><StatusBadge :status="row.status"/></template></el-table-column>
+        <el-table-column v-if="config.key === 'weatherWindow'" label="失效时间" width="180">
+          <template #default="{ row }"><span :class="{ 'muted': new Date(row.expireAt).getTime() < Date.now() }">{{ formatDate(row.expireAt) }}</span></template>
+        </el-table-column>
+        <el-table-column v-if="config.key === 'safetyClearance'" label="关联窗口" width="170">
+          <template #default="{ row }">
+            <strong>{{ row.relatedCode }}</strong>
+            <small>{{ row.facility }}</small>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="config.key === 'safetyClearance'" label="冻结版本/有效期" width="200">
+          <template #default="{ row }">
+            <span>v{{ row.windowVersion || 1 }}</span>
+            <small>至 {{ formatDate(row.windowExpireAt || '') }}</small>
+          </template>
+        </el-table-column>
         <el-table-column prop="riskLevel" label="风险" width="90"/>
         <el-table-column prop="owner" label="责任人"/>
         <el-table-column label="指标"><template #default="{ row }">{{ row.metricValue }} {{ row.metricUnit }}</template></el-table-column>
+        <el-table-column v-if="config.key === 'safetyClearance'" label="失效提示" min-width="220">
+          <template #default="{ row }">
+            <el-alert v-if="row.invalidReason" :title="row.invalidReason" :type="row.status === 'expired' ? 'error' : 'warning'" :closable="false" show-icon/>
+            <span v-else-if="row.submittedBy" class="muted">等待复核（提交人 {{ row.submittedBy }}）</span>
+            <span v-else class="muted">待提交</span>
+          </template>
+        </el-table-column>
         <el-table-column label="更新时间" width="180"><template #default="{ row }">{{ formatDate(row.updatedAt) }}</template></el-table-column>
         <el-table-column label="操作" width="200">
           <template #default="{ row }">
-            <el-button v-if="!hideTransitions && canWrite && nextStatus(row.status, config.statuses)" link type="primary" @click="pending = { item: row, status: nextStatus(row.status, config.statuses)! }">推进至 {{ nextStatus(row.status, config.statuses) }}</el-button>
+            <el-button v-if="config.key === 'safetyClearance' && ['restricted', 'expired'].includes(row.status) && canWrite" link type="warning" @click="store.resubmitClearance(config.path, row)">重新提交</el-button>
+            <el-button v-else-if="!hideTransitions && canWrite && nextStatus(row.status, config.statuses)" link type="primary" @click="pending = { item: row, status: nextStatus(row.status, config.statuses)! }">推进至 {{ nextStatus(row.status, config.statuses) }}</el-button>
             <span v-else-if="!canWrite" class="muted">只读权限</span>
             <span v-else-if="hideTransitions" class="muted">由安全确认面板处理</span>
             <span v-else class="muted">流程结束</span>

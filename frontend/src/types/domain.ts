@@ -13,9 +13,12 @@ export interface DomainRecord {
   metricValue: number;
   metricUnit: string;
   effectiveAt: string;
+  expireAt?: string;
   evidence: string;
   relatedCode: string;
   windowVersion?: number;
+  windowExpireAt?: string;
+  invalidReason?: string;
   submittedBy?: string;
   submittedAt?: string;
   confirmedBy?: string;
